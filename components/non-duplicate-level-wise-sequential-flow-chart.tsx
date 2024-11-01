@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback, useRef } from "react";
+import React, { useState, useCallback, useRef, useEffect } from "react";
 import ReactFlow, {
   Node,
   Edge,
@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Loader2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import { useFlowStore, FlowData } from "@/lib/stores/flow-store";
 
 // 自定义节点组件
 const CustomNode = ({ data }: NodeProps) => (
@@ -137,22 +138,31 @@ const decompose = async (text: string): Promise<DecomposePart[]> => {
 };
 
 export function FlowChart() {
-  const [nodes, setNodes, onNodesChange] = useNodesState([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  const {
+    nodes,
+    edges,
+    setNodes,
+    setEdges,
+    onNodesChange,
+    onEdgesChange,
+    onConnect,
+    resetFlow,
+    initializeFromData,
+  } = useFlowStore();
+
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-
-  // 添加一个 ref 来跟踪每个深度的节点位置
   const depthNodesRef = useRef<Map<number, { start: number; end: number }>>(
     new Map()
   );
 
-  // 在 FlowChart 组件开始时添加清理函数
+  // 修改 resetDepthNodes 函数
   const resetDepthNodes = () => {
     depthNodesRef.current.clear();
+    resetFlow(); // 重置流程图
   };
 
-  // 创建单个节点和边
+  // 修改 createNodeAndEdge 函数
   const createNodeAndEdge = async (
     text: string,
     ratio: number,
@@ -168,12 +178,8 @@ export function FlowChart() {
       data: { label: text, ratio, isNew: true, depth },
     };
 
-    // createdNodesRef.current.add(text);
-
-    // 添加新节点
     setNodes((prevNodes) => [...prevNodes, newNode]);
 
-    // 移新节点的动画效果
     await new Promise((resolve) => setTimeout(resolve, 300));
     setNodes((prevNodes) =>
       prevNodes.map((node) =>
@@ -183,7 +189,6 @@ export function FlowChart() {
       )
     );
 
-    // 创建与父节点的连接
     let newEdge: Edge | null = null;
     if (parentId) {
       newEdge = {
@@ -193,8 +198,8 @@ export function FlowChart() {
         style: { stroke: "hsl(var(--primary))", strokeWidth: 2 },
         animated: true,
       };
-      if (parentId && newEdge) {
-        setEdges((prevEdges) => [...prevEdges, newEdge]);
+      if (newEdge) {
+        setEdges((prevEdges) => [...prevEdges, newEdge!]);
       }
     }
 
@@ -313,20 +318,67 @@ export function FlowChart() {
     );
   };
 
-  // 处理图表生成
+  // 修改 handleGenerate
   const handleGenerate = useCallback(async () => {
     setIsLoading(true);
-    setNodes([]);
-    setEdges([]);
-    resetDepthNodes(); // 重置深度节点信息
-    await createNodesAndEdges(input, null, 0, 0, 0, true);
-    setIsLoading(false);
-  }, [input, setNodes, setEdges]);
+    resetDepthNodes();
+    try {
+      await createNodesAndEdges(input, null, 0, 0, 0, true);
+    } catch (error) {
+      console.error("Error generating flow:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [input, resetDepthNodes, createNodesAndEdges]);
 
-  const onConnect = useCallback(
-    (params: Connection) => setEdges((eds) => addEdge(params, eds)),
-    [setEdges]
-  );
+  // 添加初始化方法
+  const initializeFlow = useCallback((data: FlowData) => {
+    resetDepthNodes();
+    initializeFromData(data);
+  }, []);
+
+  // 初始化
+  useEffect(() => {
+    const data: FlowData = {
+      id: "root",
+      label: "根节点",
+      depth: 0,
+      ratio: 1,
+      children: [
+        {
+          id: "child1",
+          label: "子节点1",
+          depth: 1,
+          ratio: 0.5,
+          children: [],
+        },
+        {
+          id: "child2",
+          label: "子节点2",
+          depth: 1,
+          ratio: 0.5,
+          children: [
+            {
+              id: "child4",
+              label: "子节点4",
+              depth: 1,
+              ratio: 0.5,
+              children: [],
+            },
+          ],
+        },
+        {
+          id: "child3",
+          label: "子节点3",
+          depth: 1,
+          ratio: 0.5,
+          children: [],
+        },
+      ],
+    };
+
+    initializeFlow(data);
+  }, []);
 
   return (
     <div className="w-full h-screen bg-background text-foreground">
