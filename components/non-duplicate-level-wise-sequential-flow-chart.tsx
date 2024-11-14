@@ -1,6 +1,12 @@
 "use client";
 
-import React, { useState, useCallback, useRef, useEffect } from "react";
+import React, {
+  useState,
+  useCallback,
+  useRef,
+  useEffect,
+  useMemo,
+} from "react";
 import ReactFlow, {
   Node,
   Edge,
@@ -23,39 +29,117 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { useFlowStore, FlowData } from "@/lib/stores/flow-store";
 
+// 在文件顶部添加新的类型定义
+interface NodeData {
+  label: string;
+  ratio: number;
+  depth: number;
+  isNew?: boolean;
+  isHighlighted?: boolean;
+}
+
 // 自定义节点组件
-const CustomNode = ({ data }: NodeProps) => (
-  <Card
-    className={`w-[200px] transition-all duration-300 ${
-      data.isNew ? "scale-0" : "scale-100"
-    }`}
-  >
-    <CardContent className="p-4 flex flex-col gap-2">
-      <div className="flex items-center justify-between">
-        <div className="text-sm font-medium leading-none">{data.label}</div>
-        <div className="text-xs text-muted-foreground rounded-md bg-muted px-2 py-1">
-          Level {data.depth}
+const CustomNode = ({ data, id }: NodeProps<NodeData>) => {
+  const { updateFlowDataNode, flowData } = useFlowStore();
+  const [isDecomposing, setIsDecomposing] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
+
+  // 检查节点是否已经被拆分（是否有子节点
+  const hasChildren = useMemo(() => {
+    const findNode = (data: FlowData | null): boolean => {
+      if (!data) return false;
+      if (data.id === id) return data.children.length > 0;
+      return data.children.some(findNode);
+    };
+    return findNode(flowData);
+  }, [flowData, id]);
+
+  const handleDecompose = async () => {
+    if (isDecomposing || data.label.length <= 1 || hasChildren) return;
+    setIsDecomposing(true);
+
+    try {
+      const parts = await decompose(data.label);
+      const children: FlowData[] = parts.map((part) => ({
+        id: `node-${Math.random()}`,
+        label: part.text,
+        depth: data.depth + 1,
+        ratio: part.ratio,
+        children: [],
+      }));
+
+      updateFlowDataNode(id, children);
+    } catch (error) {
+      console.error("Error decomposing node:", error);
+    } finally {
+      setIsDecomposing(false);
+    }
+  };
+
+  return (
+    <Card
+      className={`w-[200px] transition-all duration-300 ${
+        data.isNew ? "scale-0" : "scale-100"
+      } ${!data.isHighlighted ? "opacity-20 z-0" : "opacity-100 z-10"}`}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+    >
+      <CardContent className="p-4 flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <div className="text-sm font-medium leading-none">{data.label}</div>
+          <div className="text-xs text-muted-foreground rounded-md bg-muted px-2 py-1">
+            Level {data.depth}
+          </div>
         </div>
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <Progress value={data.ratio * 100} className="h-2" />
-        <div className="text-xs text-muted-foreground text-right">
-          用时比例 {Math.round(data.ratio * 100)}%
+        <div className="flex flex-col gap-1.5">
+          <Progress value={data.ratio * 100} className="h-2" />
+          <div className="text-xs text-muted-foreground text-right">
+            用时比例 {Math.round(data.ratio * 100)}%
+          </div>
         </div>
-      </div>
-      <Handle
-        type="target"
-        position={Position.Top}
-        className="w-3 h-3 !bg-primary border-2 border-background dark:border-background"
-      />
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        className="w-3 h-3 !bg-primary border-2 border-background dark:border-background"
-      />
-    </CardContent>
-  </Card>
-);
+        {!hasChildren && data.label.length > 1 && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleDecompose}
+            disabled={isDecomposing}
+          >
+            {isDecomposing ? (
+              <>
+                <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                拆分中...
+              </>
+            ) : (
+              "拆分"
+            )}
+          </Button>
+        )}
+        <Handle
+          type="target"
+          position={Position.Top}
+          className="w-3 h-3 !bg-primary border-2 border-background dark:border-background"
+        />
+        <Handle
+          type="source"
+          position={Position.Bottom}
+          className="w-3 h-3 !bg-primary border-2 border-background dark:border-background"
+        />
+        <Handle
+          type="target"
+          position={Position.Left}
+          id="left"
+          className="w-3 h-3 !bg-primary border-2 border-background dark:border-background"
+        />
+        <Handle
+          type="source"
+          position={Position.Right}
+          id="right"
+          className="w-3 h-3 !bg-primary border-2 border-background dark:border-background"
+        />
+      </CardContent>
+    </Card>
+  );
+};
 
 const nodeTypes = {
   custom: CustomNode,
@@ -137,248 +221,299 @@ const decompose = async (text: string): Promise<DecomposePart[]> => {
   return parts;
 };
 
+// 修改 convertFlowDataToNodesAndEdges 函数中的边处理逻辑
+const convertFlowDataToNodesAndEdges = (
+  data: FlowData,
+  parentId: string | null = null,
+  x = 0,
+  y = 0,
+  highlightedNodes: Set<string> = new Set()
+): { nodes: Node[]; edges: Edge[] } => {
+  const nodes: Node[] = [];
+  const edges: Edge[] = [];
+  const NODE_WIDTH = 200;
+  const NODE_SPACING = 50;
+  const VERTICAL_SPACING = 150;
+
+  // 判断边是否应该高亮
+  const shouldHighlightEdge = (sourceId: string, targetId: string): boolean => {
+    return highlightedNodes.has(sourceId) && highlightedNodes.has(targetId);
+  };
+
+  const processNode = (
+    nodeData: FlowData,
+    parentId: string | null,
+    x: number,
+    y: number
+  ) => {
+    const isHighlighted = highlightedNodes.has(nodeData.id);
+    const node: Node = {
+      id: nodeData.id,
+      type: "custom",
+      position: { x, y },
+      data: {
+        label: nodeData.label,
+        ratio: nodeData.ratio,
+        depth: nodeData.depth,
+        isNew: false,
+        isHighlighted,
+      },
+      zIndex: isHighlighted ? 1 : 0,
+    };
+    nodes.push(node);
+
+    // 如果有父节点，创建边
+    if (parentId) {
+      const isHighlighted = shouldHighlightEdge(parentId, nodeData.id);
+      edges.push({
+        id: `edge-${parentId}-${node.id}`,
+        source: parentId,
+        target: node.id,
+        style: {
+          stroke: "hsl(var(--primary))",
+          strokeWidth: 2,
+          opacity: isHighlighted ? 1 : 0.2,
+        },
+        animated: isHighlighted,
+      });
+    }
+
+    // 处理子节点
+    if (nodeData.children.length > 0) {
+      const totalWidth =
+        nodeData.children.length * NODE_WIDTH +
+        (nodeData.children.length - 1) * NODE_SPACING;
+      const startX = x - totalWidth / 2;
+
+      nodeData.children.forEach((child, index) => {
+        const childX = startX + index * (NODE_WIDTH + NODE_SPACING);
+        const childY = y + VERTICAL_SPACING;
+        processNode(child, node.id, childX, childY);
+
+        // 修改兄弟节点之间的连接
+        if (index > 0) {
+          const prevChildId = nodeData.children[index - 1].id;
+          const isHighlighted = shouldHighlightEdge(prevChildId, child.id);
+          edges.push({
+            id: `sibling-edge-${prevChildId}-${child.id}`,
+            source: prevChildId,
+            target: child.id,
+            sourceHandle: "right",
+            targetHandle: "left",
+            type: "smoothstep",
+            style: {
+              stroke: "hsl(var(--primary))",
+              strokeWidth: 1,
+              opacity: isHighlighted ? 0.5 : 0.1,
+            },
+            animated: false,
+          });
+        }
+      });
+    }
+  };
+
+  processNode(data, parentId, x, y);
+  return { nodes, edges };
+};
+
 export function FlowChart() {
   const {
     nodes,
     edges,
+    flowData,
     setNodes,
     setEdges,
+    setFlowData,
     onNodesChange,
     onEdgesChange,
     onConnect,
     resetFlow,
-    initializeFromData,
   } = useFlowStore();
 
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const depthNodesRef = useRef<Map<number, { start: number; end: number }>>(
-    new Map()
+  const [highlightedNodes, setHighlightedNodes] = useState<Set<string>>(
+    new Set()
   );
 
-  // 修改 resetDepthNodes 函数
-  const resetDepthNodes = () => {
-    depthNodesRef.current.clear();
-    resetFlow(); // 重置流程图
-  };
+  // 获取节点的所有祖先节点ID
+  const getAncestorIds = useCallback(
+    (
+      nodeId: string,
+      data: FlowData | null
+    ): { ancestors: string[]; siblings: string[] } => {
+      if (!data) return { ancestors: [], siblings: [] };
 
-  // 修改 createNodeAndEdge 函数
-  const createNodeAndEdge = async (
-    text: string,
-    ratio: number,
-    parentId: string | null,
-    depth: number,
-    x: number,
-    y: number
-  ): Promise<[Node, Edge | null]> => {
-    const newNode: Node = {
-      id: `node-${Math.random()}`,
-      type: "custom",
-      position: { x, y },
-      data: { label: text, ratio, isNew: true, depth },
-    };
+      const findAncestorsAndSiblings = (
+        currentNode: FlowData,
+        targetId: string,
+        path: string[],
+        parent: FlowData | null = null
+      ): { ancestors: string[]; siblings: string[] } | null => {
+        // 如果找到目标节点，返回路径和同级节点
+        if (currentNode.id === targetId) {
+          const siblings = parent
+            ? parent.children
+                .filter((sibling) => sibling.id !== targetId)
+                .map((sibling) => sibling.id)
+            : [];
+          return { ancestors: path, siblings };
+        }
 
-    setNodes((prevNodes) => [...prevNodes, newNode]);
+        // 在子节点中查找
+        for (const child of currentNode.children) {
+          const result = findAncestorsAndSiblings(
+            child,
+            targetId,
+            [...path, currentNode.id],
+            currentNode
+          );
+          if (result) {
+            return result;
+          }
+        }
 
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    setNodes((prevNodes) =>
-      prevNodes.map((node) =>
-        node.id === newNode.id
-          ? { ...node, data: { ...node.data, isNew: false } }
-          : node
-      )
-    );
-
-    let newEdge: Edge | null = null;
-    if (parentId) {
-      newEdge = {
-        id: `edge-${parentId}-${newNode.id}`,
-        source: parentId,
-        target: newNode.id,
-        style: { stroke: "hsl(var(--primary))", strokeWidth: 2 },
-        animated: true,
+        return null;
       };
-      if (newEdge) {
-        setEdges((prevEdges) => [...prevEdges, newEdge!]);
-      }
+
+      const result = findAncestorsAndSiblings(data, nodeId, []) || {
+        ancestors: [],
+        siblings: [],
+      };
+      return result;
+    },
+    []
+  );
+
+  // 获取节点的所有子孙节点ID
+  const getDescendantIds = useCallback(
+    (nodeId: string, data: FlowData | null): string[] => {
+      if (!data) return [];
+
+      const findDescendants = (currentNode: FlowData): string[] => {
+        const descendants: string[] = [currentNode.id];
+        currentNode.children.forEach((child) => {
+          descendants.push(...findDescendants(child));
+        });
+        return descendants;
+      };
+
+      const findNode = (currentNode: FlowData): FlowData | null => {
+        if (currentNode.id === nodeId) return currentNode;
+        for (const child of currentNode.children) {
+          const result = findNode(child);
+          if (result) return result;
+        }
+        return null;
+      };
+
+      const targetNode = data && findNode(data);
+      return targetNode ? findDescendants(targetNode) : [];
+    },
+    []
+  );
+
+  // 处理节点hover事件
+  const handleNodeMouseEnter = useCallback(
+    (nodeId: string) => {
+      if (!flowData) return;
+
+      const { ancestors, siblings } = getAncestorIds(nodeId, flowData);
+      const descendants = getDescendantIds(nodeId, flowData);
+      const highlighted = new Set([
+        nodeId,
+        ...ancestors,
+        ...siblings,
+        ...descendants,
+      ]);
+
+      setHighlightedNodes(highlighted);
+    },
+    [flowData, getAncestorIds, getDescendantIds]
+  );
+
+  const handleNodeMouseLeave = useCallback(() => {
+    setHighlightedNodes(new Set());
+  }, []);
+
+  // 从边获取相关节点ID
+  const getNodesFromEdge = useCallback(
+    (edgeId: string): { sourceId: string; targetId: string } => {
+      const [, sourceId, targetId] = edgeId.split("-").pop()?.split("_") || [
+        "",
+        "",
+        "",
+      ];
+      return { sourceId, targetId };
+    },
+    []
+  );
+
+  // 处理边 hover 事件
+  const handleEdgeMouseEnter = useCallback(
+    (event: React.MouseEvent, edge: Edge) => {
+      if (!flowData) return;
+
+      // 获取边连接的两个节点
+      const { source: sourceId, target: targetId } = edge;
+
+      // 获取源节点的相关节点
+      const sourceRelated = getAncestorIds(sourceId, flowData);
+      const sourceDescendants = getDescendantIds(sourceId, flowData);
+
+      // 获取目标节点的相关节点
+      const targetRelated = getAncestorIds(targetId, flowData);
+      const targetDescendants = getDescendantIds(targetId, flowData);
+
+      // 合并所有需要高亮的节点
+      const highlighted = new Set([
+        sourceId,
+        targetId,
+        ...sourceRelated.ancestors,
+        ...sourceRelated.siblings,
+        ...sourceDescendants,
+        ...targetRelated.ancestors,
+        ...targetRelated.siblings,
+        ...targetDescendants,
+      ]);
+
+      setHighlightedNodes(highlighted);
+    },
+    [flowData, getAncestorIds, getDescendantIds]
+  );
+
+  // 修改 useEffect，在转换节点时包含高亮信息
+  useEffect(() => {
+    if (flowData) {
+      const { nodes: newNodes, edges: newEdges } =
+        convertFlowDataToNodesAndEdges(flowData, null, 0, 0, highlightedNodes);
+      setNodes(newNodes);
+      setEdges(newEdges);
     }
+  }, [flowData, highlightedNodes]);
 
-    return [newNode, newEdge];
-  };
-
-  // 创建同一级的所有节点
-  const createLevelNodes = async (
-    parts: DecomposePart[],
-    parentId: string | null,
-    depth: number,
-    x: number,
-    y: number
-  ): Promise<Node[]> => {
-    const NODE_WIDTH = 200;
-    const NODE_SPACING = 50;
-    const totalWidth =
-      parts.length * NODE_WIDTH + (parts.length - 1) * NODE_SPACING;
-
-    // 检查同一深度是否已有节点
-    const depthInfo = depthNodesRef.current.get(depth);
-    let startX = x - totalWidth / 2;
-
-    if (depthInfo) {
-      // 如果新节点组与现有节点重叠，将其移到现有节点的右侧
-      const rightmostX = depthInfo.end;
-      if (startX - NODE_SPACING < rightmostX) {
-        startX = rightmostX + NODE_SPACING;
-      }
-    }
-
-    // 计算这组节点的范围
-    const endX = startX + totalWidth;
-
-    // 更新深度信息
-    if (depthInfo) {
-      depthNodesRef.current.set(depth, {
-        start: Math.min(depthInfo.start, startX),
-        end: Math.max(depthInfo.end, endX),
-      });
-    } else {
-      depthNodesRef.current.set(depth, { start: startX, end: endX });
-    }
-
-    const levelNodes: Node[] = [];
-    let previousNode: Node | null = null; // 用于跟踪前一个节点
-
-    // 创建节点并连接
-    for (let i = 0; i < parts.length; i++) {
-      const nodeX = startX + i * (NODE_WIDTH + NODE_SPACING);
-      const { text, ratio } = parts[i];
-      const [node, _] = await createNodeAndEdge(
-        text,
-        ratio,
-        parentId,
-        depth,
-        nodeX,
-        y
-      );
-      levelNodes.push(node);
-
-      // 如果有前一个节点，创建从前一个节点到当前节点的连接
-      if (previousNode) {
-        const siblingEdge: Edge = {
-          id: `sibling-edge-${previousNode.id}-${node.id}`,
-          source: previousNode.id,
-          target: node.id,
-          type: "smoothstep", // 使用平滑的曲线
-          style: {
-            stroke: "hsl(var(--primary))",
-            strokeWidth: 1, // 使用较细的线条
-            opacity: 0.5, // 降低透明度以区分父子连接
-          },
-          animated: false,
-        };
-        setEdges((prevEdges) => [...prevEdges, siblingEdge]);
-      }
-
-      previousNode = node; // 更新前一个节点
-    }
-
-    return levelNodes;
-  };
-
-  // 递归创建节点和边
-  const createNodesAndEdges = async (
-    text: string,
-    parentId: string | null,
-    x: number,
-    y: number,
-    depth: number = 0,
-    isRoot: boolean = true
-  ): Promise<void> => {
-    const parts = isRoot ? [{ text, ratio: 1 }] : await decompose(text);
-    const childNodes = await createLevelNodes(
-      parts,
-      parentId,
-      depth,
-      x,
-      y + 150
-    );
-
-    await Promise.all(
-      childNodes.map((childNode) =>
-        childNode.data.label.length > 1
-          ? createNodesAndEdges(
-              childNode.data.label,
-              childNode.id,
-              childNode.position.x,
-              childNode.position.y,
-              depth + 1,
-              false
-            )
-          : Promise.resolve()
-      )
-    );
-  };
-
-  // 修改 handleGenerate
   const handleGenerate = useCallback(async () => {
+    if (!input.trim()) return;
+
     setIsLoading(true);
-    resetDepthNodes();
+    resetFlow();
+
     try {
-      await createNodesAndEdges(input, null, 0, 0, 0, true);
+      const initialData: FlowData = {
+        id: `node-${Math.random()}`,
+        label: input,
+        depth: 0,
+        ratio: 1,
+        children: [],
+      };
+      setFlowData(initialData);
     } catch (error) {
       console.error("Error generating flow:", error);
     } finally {
       setIsLoading(false);
     }
-  }, [input, resetDepthNodes, createNodesAndEdges]);
-
-  // 添加初始化方法
-  const initializeFlow = useCallback((data: FlowData) => {
-    resetDepthNodes();
-    initializeFromData(data);
-  }, []);
-
-  // 初始化
-  useEffect(() => {
-    const data: FlowData = {
-      id: "root",
-      label: "根节点",
-      depth: 0,
-      ratio: 1,
-      children: [
-        {
-          id: "child1",
-          label: "子节点1",
-          depth: 1,
-          ratio: 0.5,
-          children: [],
-        },
-        {
-          id: "child2",
-          label: "子节点2",
-          depth: 1,
-          ratio: 0.5,
-          children: [
-            {
-              id: "child4",
-              label: "子节点4",
-              depth: 1,
-              ratio: 0.5,
-              children: [],
-            },
-          ],
-        },
-        {
-          id: "child3",
-          label: "子节点3",
-          depth: 1,
-          ratio: 0.5,
-          children: [],
-        },
-      ],
-    };
-
-    initializeFlow(data);
-  }, []);
+  }, [input, resetFlow, setFlowData]);
 
   return (
     <div className="w-full h-screen bg-background text-foreground">
@@ -415,6 +550,10 @@ export function FlowChart() {
         onConnect={onConnect}
         nodeTypes={nodeTypes}
         defaultViewport={{ x: 500, y: 0, zoom: 0.8 }}
+        onNodeMouseEnter={(_, node) => handleNodeMouseEnter(node.id)}
+        onNodeMouseLeave={handleNodeMouseLeave}
+        onEdgeMouseEnter={handleEdgeMouseEnter}
+        onEdgeMouseLeave={handleNodeMouseLeave}
       >
         <Background />
         <Controls />
