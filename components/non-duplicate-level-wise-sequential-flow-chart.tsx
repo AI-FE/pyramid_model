@@ -28,6 +28,7 @@ import { Loader2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { useFlowStore, FlowData } from "@/lib/stores/flow-store";
+import { decomposeWorkflow } from "@/lib/llm";
 
 // 在文件顶部添加新的类型定义
 interface NodeData {
@@ -59,7 +60,7 @@ const CustomNode = ({ data, id }: NodeProps<NodeData>) => {
     setIsDecomposing(true);
 
     try {
-      const parts = await decompose(data.label);
+      const parts = await decomposeWorkflow(data.label, flowData, id);
       const children: FlowData[] = parts.map((part) => ({
         id: `node-${Math.random()}`,
         label: part.text,
@@ -80,7 +81,9 @@ const CustomNode = ({ data, id }: NodeProps<NodeData>) => {
     <Card
       className={`w-[200px] transition-all duration-300 ${
         data.isNew ? "scale-0" : "scale-100"
-      } ${!data.isHighlighted ? "opacity-20 z-0" : "opacity-100 z-10"}`}
+      } ${
+        data.isHighlighted === false ? "opacity-10 z-0" : "opacity-100 z-10"
+      }`}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
@@ -151,74 +154,16 @@ interface DecomposePart {
   ratio: number;
 }
 
-// 修改 decompose 函数
+// 替换原有的 decompose 函数
 const decompose = async (text: string): Promise<DecomposePart[]> => {
-  await new Promise((resolve) => setTimeout(resolve, 500));
-  if (text.length <= 1) return [];
-
-  // 根据文本长度决定最大可能的分割数量
-  const maxParts = Math.min(
-    4, // 最大分割数
-    Math.floor(text.length / 2) + 1 // 确保每部分至少有1个字符
-  );
-
-  // 如果文本太短，直接返回两部分
-  if (maxParts <= 2) {
-    const splitIndex = Math.floor(text.length / 2);
-    const randomRatios = [Math.random(), Math.random()];
-    const totalRatio = randomRatios.reduce((sum, ratio) => sum + ratio, 0);
-    const [ratio1, ratio2] = randomRatios.map((ratio) => ratio / totalRatio);
-
-    return [
-      { text: text.slice(0, splitIndex), ratio: ratio1 },
-      { text: text.slice(splitIndex), ratio: ratio2 },
-    ];
+  try {
+    const result = await decomposeWorkflow(text);
+    return result;
+  } catch (error) {
+    console.error("Error in decompose:", error);
+    // 如果 LLM 调用失败，返回空数组
+    return [];
   }
-
-  // 随机决定分割数量（2到maxParts个部分）
-  const partsCount = Math.floor(Math.random() * (maxParts - 1)) + 2;
-
-  // 生成分割点
-  const splitPoints = new Set<number>();
-  let attempts = 0;
-  const maxAttempts = 100; // 防止无限循环
-
-  while (splitPoints.size < partsCount - 1 && attempts < maxAttempts) {
-    const splitIndex = Math.floor(Math.random() * (text.length - 1)) + 1;
-    splitPoints.add(splitIndex);
-    attempts++;
-  }
-
-  const sortedSplitPoints = Array.from(splitPoints).sort((a, b) => a - b);
-  const actualPartsCount = sortedSplitPoints.length + 1;
-
-  // 生成随机比率
-  const randomRatios = Array(actualPartsCount)
-    .fill(0)
-    .map(() => Math.random());
-  const totalRatio = randomRatios.reduce((sum, ratio) => sum + ratio, 0);
-  const normalizedRatios = randomRatios.map((ratio) => ratio / totalRatio);
-
-  // 分割文本
-  const parts: DecomposePart[] = [];
-  let startIndex = 0;
-
-  for (let i = 0; i < sortedSplitPoints.length; i++) {
-    const endIndex = sortedSplitPoints[i];
-    parts.push({
-      text: text.slice(startIndex, endIndex),
-      ratio: normalizedRatios[i],
-    });
-    startIndex = endIndex;
-  }
-
-  // 添加最后一部分
-  parts.push({
-    text: text.slice(startIndex),
-    ratio: normalizedRatios[normalizedRatios.length - 1],
-  });
-
-  return parts;
 };
 
 // 修改 convertFlowDataToNodesAndEdges 函数中的边处理逻辑
@@ -227,7 +172,7 @@ const convertFlowDataToNodesAndEdges = (
   parentId: string | null = null,
   x = 0,
   y = 0,
-  highlightedNodes: Set<string> = new Set()
+  highlightedNodes: Set<string> | null = null
 ): { nodes: Node[]; edges: Edge[] } => {
   const nodes: Node[] = [];
   const edges: Edge[] = [];
@@ -237,6 +182,7 @@ const convertFlowDataToNodesAndEdges = (
 
   // 判断边是否应该高亮
   const shouldHighlightEdge = (sourceId: string, targetId: string): boolean => {
+    if (highlightedNodes === null) return true;
     return highlightedNodes.has(sourceId) && highlightedNodes.has(targetId);
   };
 
@@ -246,7 +192,8 @@ const convertFlowDataToNodesAndEdges = (
     x: number,
     y: number
   ) => {
-    const isHighlighted = highlightedNodes.has(nodeData.id);
+    const isHighlighted =
+      highlightedNodes === null || highlightedNodes.has(nodeData.id);
     const node: Node = {
       id: nodeData.id,
       type: "custom",
@@ -264,7 +211,7 @@ const convertFlowDataToNodesAndEdges = (
 
     // 如果有父节点，创建边
     if (parentId) {
-      const isHighlighted = shouldHighlightEdge(parentId, nodeData.id);
+      const isEdgeHighlighted = shouldHighlightEdge(parentId, nodeData.id);
       edges.push({
         id: `edge-${parentId}-${node.id}`,
         source: parentId,
@@ -272,9 +219,9 @@ const convertFlowDataToNodesAndEdges = (
         style: {
           stroke: "hsl(var(--primary))",
           strokeWidth: 2,
-          opacity: isHighlighted ? 1 : 0.2,
+          opacity: isEdgeHighlighted ? 1 : 0.1,
         },
-        animated: isHighlighted,
+        animated: isEdgeHighlighted,
       });
     }
 
@@ -293,7 +240,7 @@ const convertFlowDataToNodesAndEdges = (
         // 修改兄弟节点之间的连接
         if (index > 0) {
           const prevChildId = nodeData.children[index - 1].id;
-          const isHighlighted = shouldHighlightEdge(prevChildId, child.id);
+          const isEdgeHighlighted = shouldHighlightEdge(prevChildId, child.id);
           edges.push({
             id: `sibling-edge-${prevChildId}-${child.id}`,
             source: prevChildId,
@@ -304,7 +251,7 @@ const convertFlowDataToNodesAndEdges = (
             style: {
               stroke: "hsl(var(--primary))",
               strokeWidth: 1,
-              opacity: isHighlighted ? 0.5 : 0.1,
+              opacity: isEdgeHighlighted ? 0.5 : 0.1,
             },
             animated: false,
           });
@@ -487,7 +434,13 @@ export function FlowChart() {
   useEffect(() => {
     if (flowData) {
       const { nodes: newNodes, edges: newEdges } =
-        convertFlowDataToNodesAndEdges(flowData, null, 0, 0, highlightedNodes);
+        convertFlowDataToNodesAndEdges(
+          flowData,
+          null,
+          0,
+          0,
+          highlightedNodes.size > 0 ? highlightedNodes : null
+        );
       setNodes(newNodes);
       setEdges(newEdges);
     }
@@ -500,12 +453,20 @@ export function FlowChart() {
     resetFlow();
 
     try {
+      // 对于根节点，不需要提供上下文
+      const parts = await decomposeWorkflow(input);
       const initialData: FlowData = {
         id: `node-${Math.random()}`,
         label: input,
         depth: 0,
         ratio: 1,
-        children: [],
+        children: parts.map((part) => ({
+          id: `node-${Math.random()}`,
+          label: part.text,
+          depth: 1,
+          ratio: part.ratio,
+          children: [],
+        })),
       };
       setFlowData(initialData);
     } catch (error) {
@@ -527,7 +488,7 @@ export function FlowChart() {
               handleGenerate();
             }
           }}
-          placeholder="输入职业名称"
+          placeholder="输入工作内容"
           className="flex-grow"
           disabled={isLoading}
         />
