@@ -7,6 +7,7 @@ export interface FlowData {
   depth: number;
   ratio: number;
   children: FlowData[];
+  isNew?: boolean;
 }
 
 interface FlowState {

@@ -43,7 +43,21 @@ interface NodeData {
 const CustomNode = ({ data, id }: NodeProps<NodeData>) => {
   const { updateFlowDataNode, flowData } = useFlowStore();
   const [isDecomposing, setIsDecomposing] = useState(false);
+  const [isNew, setIsNew] = useState(data.isNew || false);
   const [isHovered, setIsHovered] = useState(false);
+
+  // 当节点是新创建的时，添加动画效果
+  useEffect(() => {
+    if (data.isNew) {
+      // 延迟一帧，确保初始状态被渲染
+      requestAnimationFrame(() => {
+        // 延迟移除 isNew 状态，触发动画
+        setTimeout(() => {
+          setIsNew(false);
+        }, 50);
+      });
+    }
+  }, [data.isNew]);
 
   // 检查节点是否已经被拆分（是否有子节点
   const hasChildren = useMemo(() => {
@@ -67,9 +81,19 @@ const CustomNode = ({ data, id }: NodeProps<NodeData>) => {
         depth: data.depth + 1,
         ratio: part.ratio,
         children: [],
+        isNew: true, // 标记为新节点
       }));
 
       updateFlowDataNode(id, children);
+
+      // 延迟一段时间后移除 isNew 标记
+      setTimeout(() => {
+        const updatedChildren = children.map((child) => ({
+          ...child,
+          isNew: false,
+        }));
+        updateFlowDataNode(id, updatedChildren);
+      }, 500); // 与动画持续时间匹配
     } catch (error) {
       console.error("Error decomposing node:", error);
     } finally {
@@ -79,8 +103,8 @@ const CustomNode = ({ data, id }: NodeProps<NodeData>) => {
 
   return (
     <Card
-      className={`w-[200px] transition-all duration-300 ${
-        data.isNew ? "scale-0" : "scale-100"
+      className={`w-[200px] transition-all duration-500 ${
+        isNew ? "scale-0 translate-y-[-20px]" : "scale-100 translate-y-0"
       } ${
         data.isHighlighted === false ? "opacity-10 z-0" : "opacity-100 z-10"
       }`}
@@ -202,7 +226,7 @@ const convertFlowDataToNodesAndEdges = (
         label: nodeData.label,
         ratio: nodeData.ratio,
         depth: nodeData.depth,
-        isNew: false,
+        isNew: nodeData.isNew,
         isHighlighted,
       },
       zIndex: isHighlighted ? 1 : 0,
@@ -453,7 +477,6 @@ export function FlowChart() {
     resetFlow();
 
     try {
-      // 对于根节点，不需要提供上下文
       const parts = await decomposeWorkflow(input);
       const initialData: FlowData = {
         id: `node-${Math.random()}`,
@@ -466,7 +489,9 @@ export function FlowChart() {
           depth: 1,
           ratio: part.ratio,
           children: [],
+          isNew: true, // 标记为新节点
         })),
+        isNew: true, // 标记为新节点
       };
       setFlowData(initialData);
     } catch (error) {

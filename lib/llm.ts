@@ -1,4 +1,5 @@
-import { Ollama } from "@langchain/ollama";
+// import { Ollama } from "@langchain/ollama";
+import { ChatOpenAI } from "@langchain/openai";
 import { StructuredOutputParser } from "langchain/output_parsers";
 import { PromptTemplate } from "@langchain/core/prompts";
 import { z } from "zod";
@@ -18,7 +19,7 @@ const workflowParser = StructuredOutputParser.fromZodSchema(
   )
 );
 
-// 添加获取树状结构字符串的函数
+// 修改获取树状结构字符串的函数
 function getTreeString(
   flowData: FlowData,
   currentNodeId: string,
@@ -28,14 +29,12 @@ function getTreeString(
   const isCurrentNode = flowData.id === currentNodeId;
   const prefix = isCurrentNode ? "▶ " : "  ";
 
-  // 添加当前节点
-  result += `${indent}${prefix}${flowData.label} (${Math.round(
-    flowData.ratio * 100
-  )}%)\n`;
+  // 添加当前节点，不显示百分比
+  result += `${indent}${prefix}${flowData.label}\n`;
 
   // 递归添加子节点
   if (flowData.children.length > 0) {
-    flowData.children.forEach((child, index) => {
+    flowData.children.forEach((child) => {
       result += getTreeString(child, currentNodeId, indent + "  ");
     });
   }
@@ -44,55 +43,58 @@ function getTreeString(
 }
 
 // 修改提示模板
-const PROMPT_TEMPLATE = `你是一个工作流程分析专家。请将以下工作内容拆解为若干个主要工作环节。
+const PROMPT_TEMPLATE = `作为工作流程分析专家，请拆解以下工作内容。
 
-当前工作流程树结构：
+工作流程树（▶ 为待拆解节点）：
 {context}
 
-需要拆解的工作内容："{input}"
+待拆解内容："{input}"
+
+注意：
+1. 拆解结果不得与树中已有环节重复
+2. 拆解必须是当前工作的直接子任务
+3. 最后一个子任务应自然衔接下一环节
 
 拆解要求：
-1. 每个环节需要包含：
-   - 环节名称（简明扼要）
-   - 该环节预计占用总工作时间的比例（所有环节比例之和必须等于1）
+- 每个环节包含名称和时间比例（总和为1）
+- 只包含当前工种的具体工作
+- 环节之间保持顺序连贯性
 
-2. 拆解原则：
-   - 只拆解当前层级直接相关的工作内容
-   - 拆解出的环节应该是当前工作内容的直接子任务
-   - 避免跨层级拆解（不要包含已在其他层级出现的任务）
-   - 保持同一层级的工作环节在逻辑上平行且互补
-   - 参考工作流程树的整体结构，确保拆解的合理性
+示例：
+× 错误："前端开发" -> "写代码"、"开会"、"测试"
+  原因：任务笼统且包含其他工种职责
 
-举例说明：
-× 错误的拆解方式：
-  "前端开发" -> "写代码"、"开会"、"部署上线"
-  （这种拆解缺乏逻辑性和完整性）
-
-√ 正确的拆解方式：
-  "前端开发" -> "需求分析"、"UI设计"、"功能开发"、"测试优化"
-  （这种拆解符合工作流程的逻辑顺序和完整性）
-
-请确保：
-- 根据工作内容的复杂程度，合理拆分工作环节
-- 每个环节名称要简明扼要
-- 所有环节的时间比例之和必须等于1
-- 环节的拆解要在当前上下文范围内，与整体工作流程保持逻辑连贯性
-- 严格按照要求的JSON格式输出
-- 确保每个环节都是必要且独立的，避免过度拆分或过于笼统
-- 注意查看完整的工作流程树，避免与其他层级的任务重复或冲突
+√ 正确："前端开发" -> "组件设计"、"交互实现"、"性能优化"
+  原因：都是前端工程师的具体工作，且有序连贯
 
 {format_instructions}
-`;
+
+确保：
+- 严格限定当前工种职责范围
+- 环节间保持逻辑顺序
+- 最后环节能顺畅过渡
+- 遵循JSON格式输出`;
 
 const prompt = PromptTemplate.fromTemplate(PROMPT_TEMPLATE);
 
 // 创建 Ollama 实例
-const model = new Ollama({
-  baseUrl: "http://localhost:11434",
-  model: "qwen2.5:7b",
-  temperature: 1,
-  verbose: true,
-});
+// const model = new Ollama({
+//   baseUrl: "http://localhost:11434",
+//   model: "qwen2.5:7b",
+//   temperature: 1,
+//   verbose: true,
+// });
+
+const model = new ChatOpenAI(
+  {
+    modelName: "claude-3-5-sonnet-20240620",
+    temperature: 1,
+    streaming: false,
+    // 测试用 ⚠️ 不要上传自己的key
+    openAIApiKey: process.env.NEXT_PUBLIC_OPENAI_API_KEY,
+  },
+  { baseURL: "https://api.302.ai/v1/chat/completions" }
+);
 
 // 获取工作流程路径的函数
 function getWorkflowPath(flowData: FlowData, nodeId: string): string[] {
@@ -143,14 +145,15 @@ export async function decomposeWorkflow(
     // 打印完整的提示信息
     console.log("\n=== Prompt to LLM ===\n", input, "\n==================\n");
 
+    const response = await model.invoke([["system", input]]);
     // 获取模型响应
-    const response = await model.call(input);
+    // const response = await model.call([{ role: "user", content: input }]);
 
     // 打印模型响应
     console.log("\n=== LLM Response ===\n", response, "\n==================\n");
 
     // 解析响应
-    const parsed = await workflowParser.parse(response);
+    const parsed = await workflowParser.parse(response.content);
 
     // 打印解析后的结果
     console.log("\n=== Parsed Result ===\n", parsed, "\n==================\n");
