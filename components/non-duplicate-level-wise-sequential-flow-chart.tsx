@@ -1,25 +1,15 @@
 "use client";
 
-import React, {
-  useState,
-  useCallback,
-  useRef,
-  useEffect,
-  useMemo,
-} from "react";
+import React, { useState, useCallback, useEffect, useMemo } from "react";
 import ReactFlow, {
   Node,
   Edge,
-  addEdge,
-  useNodesState,
-  useEdgesState,
   Controls,
   Background,
   NodeProps,
   Handle,
   Position,
   MiniMap,
-  Connection,
 } from "reactflow";
 import "reactflow/dist/style.css";
 import { Button } from "@/components/ui/button";
@@ -74,26 +64,31 @@ const CustomNode = ({ data, id }: NodeProps<NodeData>) => {
     setIsDecomposing(true);
 
     try {
-      const parts = await decomposeWorkflow(data.label, flowData, id);
-      const children: FlowData[] = parts.map((part) => ({
-        id: `node-${Math.random()}`,
-        label: part.text,
-        depth: data.depth + 1,
-        ratio: part.ratio,
-        children: [],
-        isNew: true, // 标记为新节点
-      }));
+      const children: FlowData[] = [];
 
-      updateFlowDataNode(id, children);
+      // 使用回调函数处理流式结果
+      await decomposeWorkflow(data.label, flowData, id, (part) => {
+        const newChild: FlowData = {
+          id: `node-${Math.random()}`,
+          label: part.text,
+          depth: data.depth + 1,
+          ratio: part.ratio,
+          children: [],
+          isNew: true,
+        };
+        children.push(newChild);
+        // 立即更新节点
+        updateFlowDataNode(id, [...children]);
+      });
 
-      // 延迟一段时间后移除 isNew 标记
+      // 动画完成后移除 isNew 标记
       setTimeout(() => {
         const updatedChildren = children.map((child) => ({
           ...child,
           isNew: false,
         }));
         updateFlowDataNode(id, updatedChildren);
-      }, 500); // 与动画持续时间匹配
+      }, 500);
     } catch (error) {
       console.error("Error decomposing node:", error);
     } finally {
@@ -179,16 +174,16 @@ interface DecomposePart {
 }
 
 // 替换原有的 decompose 函数
-const decompose = async (text: string): Promise<DecomposePart[]> => {
-  try {
-    const result = await decomposeWorkflow(text);
-    return result;
-  } catch (error) {
-    console.error("Error in decompose:", error);
-    // 如果 LLM 调用失败，返回空数组
-    return [];
-  }
-};
+// const decompose = async (text: string): Promise<DecomposePart[]> => {
+//   try {
+//     const result = await decomposeWorkflow(text);
+//     return result;
+//   } catch (error) {
+//     console.error("Error in decompose:", error);
+//     // 如果 LLM 调用失败，返回空数组
+//     return [];
+//   }
+// };
 
 // 修改 convertFlowDataToNodesAndEdges 函数中的边处理逻辑
 const convertFlowDataToNodesAndEdges = (
@@ -477,23 +472,30 @@ export function FlowChart() {
     resetFlow();
 
     try {
-      const parts = await decomposeWorkflow(input);
-      const initialData: FlowData = {
-        id: `node-${Math.random()}`,
-        label: input,
-        depth: 0,
-        ratio: 1,
-        children: parts.map((part) => ({
+      const children: FlowData[] = [];
+
+      await decomposeWorkflow(input, null, null, (part) => {
+        const newChild: FlowData = {
           id: `node-${Math.random()}`,
           label: part.text,
           depth: 1,
           ratio: part.ratio,
           children: [],
-          isNew: true, // 标记为新节点
-        })),
-        isNew: true, // 标记为新节点
-      };
-      setFlowData(initialData);
+          isNew: true,
+        };
+        children.push(newChild);
+
+        // 更新整个流程图
+        const currentData: FlowData = {
+          id: `node-${Math.random()}`,
+          label: input,
+          depth: 0,
+          ratio: 1,
+          children: [...children],
+          isNew: true,
+        };
+        setFlowData(currentData);
+      });
     } catch (error) {
       console.error("Error generating flow:", error);
     } finally {
@@ -521,7 +523,7 @@ export function FlowChart() {
           {isLoading ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              生成中...
+              拆解中...
             </>
           ) : (
             "拆解工作流程"
