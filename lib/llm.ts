@@ -19,8 +19,10 @@ export async function decomposeWorkflow(
       }),
     });
 
+    console.log("Response received:", response.status, response.headers);
+
     if (!response.ok) {
-      throw new Error("Failed to decompose workflow");
+      throw new Error(`HTTP error! status: ${response.status}`);
     }
 
     const reader = response.body?.getReader();
@@ -28,22 +30,25 @@ export async function decomposeWorkflow(
       throw new Error("No response body");
     }
 
+    console.log("Starting to read stream...");
+
     let results: { text: string; ratio: number }[] = [];
     const decoder = new TextDecoder();
-    let buffer = "";
     let bracketCount = 0;
     let inObject = false;
     let currentObject = "";
 
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+
+      if (done) {
+        console.log("Stream complete");
+        break;
+      }
 
       const chunk = decoder.decode(value);
-
+      console.log("chunk", chunk);
       for (const char of chunk) {
-        buffer += char;
-
         // 开始解析对象
         if (char === "{") {
           inObject = true;
@@ -88,8 +93,6 @@ export async function decomposeWorkflow(
           }
         }
       }
-
-      if (bracketCount === 0) break;
     }
 
     // 规范化最终结果的比例
