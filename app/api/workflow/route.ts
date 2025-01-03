@@ -78,7 +78,8 @@ const prompt = PromptTemplate.fromTemplate(PROMPT_TEMPLATE);
 
 const model = new ChatOpenAI(
   {
-    modelName: "claude-3-5-sonnet-20240620",
+    // modelName: "claude-3-5-sonnet-20240620",
+    modelName: "qwen-max",
     temperature: 1,
     streaming: true,
     openAIApiKey: process.env.OPENAI_API_KEY,
