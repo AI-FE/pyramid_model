@@ -42,37 +42,39 @@ function getTreeString(
 }
 
 // 修改提示模板
-const PROMPT_TEMPLATE = `作为工作流程分析专家，请拆解以下工作内容。
+const PROMPT_TEMPLATE = `
+<role>
+  工作流程分析专家，擅长将复杂工作流程拆解为工作流程树
+</role>
 
-工作流程树（▶ 为待拆解节点）：
+<task>
+  请拆解以下工作内容："{input}"
+
+  当前工作流程树（▶ 为待拆解节点）：
 {context}
+</task>
 
-待拆解内容："{input}"
+<rules>
+  1. 每个环节包含名称和时间比例（总和为1）
+  2. 只包含当前工种的具体工作
+  3. 环节之间保持顺序连贯性
+  4. 拆解结果不得与工作流程树中已有环节重复
+  5. 拆解必须是当前工作的直接子任务
+  6. 最后一个子任务应自然衔接下一环节
+</rules>
 
-注意：
-1. 拆解结果不得与树中已有环节重复
-2. 拆解必须是当前工作的直接子任务
-3. 最后一个子任务应自然衔接下一环节
+<example>
+  错误："前端开发" -> "写代码"、"开会"、"测试"
+  原因：任务笼统且包含其他工种（测试）职责
 
-拆解要求：
-- 每个环节包含名称和时间比例（总和为1）
-- 只包含当前工种的具体工作
-- 环节之间保持顺序连贯性
-
-示例：
-× 错误："前端开发" -> "写代码"、"开会"、"测试"
-  原因：任务笼统且包含其他工种职责
-
-√ 正确："前端开发" -> "组件设计"、"交互实现"、"性能优化"
+  正确："前端开发" -> "组件设计"、"交互实现"、"性能优化"
   原因：都是前端工程师的具体工作，且有序连贯
+</example>
 
-{format_instructions}
-
-确保：
-- 严格限定当前工种职责范围
-- 环节间保持逻辑顺序
-- 最后环节能顺畅过渡
-- 遵循JSON格式输出`;
+<output_format>
+  {format_instructions}
+</output_format>
+`;
 
 const prompt = PromptTemplate.fromTemplate(PROMPT_TEMPLATE);
 
@@ -134,6 +136,7 @@ export async function POST(req: Request) {
                 // 发送结束标记前的内容
                 const jsonContent = buffer.slice(0, endIndex);
                 for (const char of jsonContent) {
+                  console.log("end in json block buffer: ", char);
                   controller.enqueue(char);
                 }
                 inJsonBlock = false;
@@ -141,13 +144,14 @@ export async function POST(req: Request) {
               } else {
                 // 没有结束标记，发送缓冲区内容并清空
                 for (const char of buffer) {
+                  console.log("in json block buffer: ", char);
                   controller.enqueue(char);
                 }
                 buffer = "";
               }
             }
           }
-
+          console.log("controller close: ");
           controller.close();
         } catch (error) {
           controller.error(error);
@@ -158,8 +162,10 @@ export async function POST(req: Request) {
     return new Response(stream, {
       headers: {
         "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
+        "Cache-Control": "no-cache, no-transform",
         Connection: "keep-alive",
+        "Transfer-Encoding": "chunked",
+        "X-Accel-Buffering": "no",
       },
     });
   } catch (error: unknown) {
